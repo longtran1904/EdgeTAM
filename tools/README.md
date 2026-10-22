@@ -16,6 +16,9 @@ python ./tools/vos_inference.py \
   --video_list_file /path-to-davis-2017/ImageSets/2017/val.txt \
   --output_mask_dir ./outputs/davis_2017_pred_pngs
 ```
+
+Pass `--use_vos_optimized_video_predictor` to enable the full-VOS
+`torch.compile` path. The first inference is slower while its graphs compile.
 (replace `/path-to-davis-2017` with the path to DAVIS 2017 dataset)
 
 To evaluate on the SA-V dataset with per-object PNG files for the object masks, we need to **add the `--per_obj_png_file` flag** as follows (using SA-V val as an example). This script will also save per-object PNG files for the output masks under the `--per_obj_png_file` flag.

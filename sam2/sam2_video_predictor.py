@@ -1177,3 +1177,88 @@ class SAM2VideoPredictor(SAM2Base):
             non_cond_frame_outputs.pop(t, None)
             for obj_output_dict in inference_state["output_dict_per_obj"].values():
                 obj_output_dict["non_cond_frame_outputs"].pop(t, None)
+
+
+def _clone_compiled_output(value):
+    """Clone tensor outputs that may otherwise alias compiled static buffers."""
+    if isinstance(value, torch.Tensor):
+        return value.clone()
+    if isinstance(value, dict):
+        return {key: _clone_compiled_output(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_compiled_output(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_compiled_output(item) for item in value)
+    return value
+
+
+class SAM2VideoPredictorVOS(SAM2VideoPredictor):
+    """Video predictor with all tensor-heavy EdgeTAM components compiled."""
+
+    def __init__(self, *args, **kwargs):
+        # SAM2Base owns image-encoder compilation. Force it on for this predictor so
+        # direct construction has the same behavior as the builder's optimized mode.
+        kwargs["compile_image_encoder"] = True
+        super().__init__(*args, **kwargs)
+        self._compile_all_components()
+
+    @staticmethod
+    def _compile_forward(module, *, mode, dynamic, clone_outputs):
+        compiled_forward = torch.compile(
+            module.forward,
+            mode=mode,
+            fullgraph=True,
+            dynamic=dynamic,
+        )
+        if not clone_outputs:
+            module.forward = compiled_forward
+            return
+
+        def cloned_forward(*args, **kwargs):
+            return _clone_compiled_output(compiled_forward(*args, **kwargs))
+
+        module.forward = cloned_forward
+
+    def _compile_all_components(self):
+        print("Compiling all EdgeTAM components for VOS. First use may be very slow.")
+
+        # The image encoder was compiled by SAM2Base. Clone its returned feature
+        # hierarchy outside the compiled graph before the buffers enter video state.
+        compiled_image_encoder = self.image_encoder.forward
+
+        def cloned_image_encoder(*args, **kwargs):
+            return _clone_compiled_output(compiled_image_encoder(*args, **kwargs))
+
+        self.image_encoder.forward = cloned_image_encoder
+
+        self._compile_forward(
+            self.memory_encoder,
+            mode="max-autotune",
+            dynamic=False,
+            clone_outputs=True,
+        )
+        if self.spatial_perceiver is not None:
+            self._compile_forward(
+                self.spatial_perceiver,
+                mode="max-autotune",
+                dynamic=False,
+                clone_outputs=True,
+            )
+        self._compile_forward(
+            self.memory_attention,
+            mode="max-autotune-no-cudagraphs",
+            dynamic=True,
+            clone_outputs=False,
+        )
+        self._compile_forward(
+            self.sam_prompt_encoder,
+            mode="max-autotune",
+            dynamic=False,
+            clone_outputs=True,
+        )
+        self._compile_forward(
+            self.sam_mask_decoder,
+            mode="max-autotune",
+            dynamic=False,
+            clone_outputs=True,
+        )

@@ -737,6 +737,7 @@ class SAM2Base(torch.nn.Module):
             )
 
         if self.spatial_perceiver is not None:
+            print("[SAM2 BASE]: Spatial perceiver is applied to the memory features.")
             maskmem_features, maskmem_pos_enc[0] = self.spatial_perceiver(
                 maskmem_features, maskmem_pos_enc[0]
             )

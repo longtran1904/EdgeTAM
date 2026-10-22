@@ -116,7 +116,11 @@ from sam2.build_sam import build_sam2_video_predictor
 
 checkpoint = "./checkpoints/edgetam.pt"
 model_cfg = "configs/edgetam.yaml"
-predictor = build_sam2_video_predictor(model_cfg, checkpoint)
+predictor = build_sam2_video_predictor(
+    model_cfg,
+    checkpoint,
+    vos_optimized=True,  # optional full-VOS torch.compile path
+)
 
 with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
     state = predictor.init_state(<your_video>)
@@ -128,6 +132,11 @@ with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
     for frame_idx, object_ids, masks in predictor.propagate_in_video(state):
         ...
 ```
+
+The optimized path compiles the image encoder, memory encoder, spatial
+perceiver, memory attention, prompt encoder, and mask decoder. Its first use is
+slow while PyTorch compiles the graphs; subsequent frames reuse them. Omit
+`vos_optimized=True` to retain eager execution.
 
 Please refer to the examples in [video_predictor_example.ipynb](./notebooks/video_predictor_example.ipynb) for details on how to add click or box prompts, make refinements, and track multiple objects in videos.
 
