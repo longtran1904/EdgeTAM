@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 from sam2.modeling.sam2_utils import LayerNorm2d, MLP
+import torch.cuda.nvtx as nvtx
 
 
 class MaskDecoder(nn.Module):
@@ -142,6 +143,7 @@ class MaskDecoder(nn.Module):
             high_res_features=high_res_features,
         )
 
+        nvtx.range_push("MaskDecoder_postprocess")
         # Select the correct mask or masks for output
         if multimask_output:
             masks = masks[:, 1:, :, :]
@@ -161,6 +163,7 @@ class MaskDecoder(nn.Module):
             # after multiple clicks during training, so the past tokens seen during training
             # are always the single mask token (and we'll let it be the object-memory token).
             sam_tokens_out = mask_tokens_out[:, 0:1]  # [b, 1, c] shape
+        nvtx.range_pop()  # pop MaskDecoder_postprocess
 
         # Prepare output
         return masks, iou_pred, sam_tokens_out, object_score_logits
@@ -175,6 +178,7 @@ class MaskDecoder(nn.Module):
         high_res_features: Optional[List[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
+        nvtx.range_push("MaskDecoder_predict_masks")
         # Concatenate output tokens
         s = 0
         if self.pred_obj_scores:
@@ -209,8 +213,10 @@ class MaskDecoder(nn.Module):
         pos_src = torch.repeat_interleave(image_pe, tokens.shape[0], dim=0)
         b, c, h, w = src.shape
 
+        nvtx.range_push("MaskDecoder_transformer")
         # Run the transformer
         hs, src = self.transformer(src, pos_src, tokens)
+        nvtx.range_pop()  # pop MaskDecoder_transformer
         iou_token_out = hs[:, s, :]
         mask_tokens_out = hs[:, s + 1 : (s + 1 + self.num_mask_tokens), :]
 
@@ -241,7 +247,8 @@ class MaskDecoder(nn.Module):
         else:
             # Obj scores logits - default to 10.0, i.e. assuming the object is present, sigmoid(10)=1
             object_score_logits = 10.0 * iou_pred.new_ones(iou_pred.shape[0], 1)
-
+            
+        nvtx.range_pop()  # pop MaskDecoder_predict_masks
         return masks, iou_pred, mask_tokens_out, object_score_logits
 
     def _get_stability_scores(self, mask_logits):

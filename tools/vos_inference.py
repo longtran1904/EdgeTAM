@@ -7,6 +7,7 @@
 import argparse
 import os
 from collections import defaultdict
+from time import perf_counter
 
 import numpy as np
 import torch
@@ -221,6 +222,8 @@ def vos_inference(
     os.makedirs(os.path.join(output_mask_dir, video_name), exist_ok=True)
     output_palette = input_palette or DAVIS_PALETTE
     video_segments = {}  # video_segments contains the per-frame segmentation results
+    torch.cuda.synchronize()
+    inference_start = perf_counter()
     for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
         inference_state
     ):
@@ -229,6 +232,14 @@ def vos_inference(
             for i, out_obj_id in enumerate(out_obj_ids)
         }
         video_segments[out_frame_idx] = per_obj_output_mask
+    torch.cuda.synchronize()
+    inference_seconds = perf_counter() - inference_start
+    num_frames = len(video_segments)
+    inference_fps = num_frames / inference_seconds if inference_seconds > 0 else 0.0
+    print(
+        f"{video_name}: {num_frames} frames propagated in "
+        f"{inference_seconds:.3f} seconds ({inference_fps:.2f} FPS)"
+    )
 
     # write the output masks as palette PNG files to output_mask_dir
     for out_frame_idx, per_obj_output_mask in video_segments.items():
@@ -242,6 +253,8 @@ def vos_inference(
             per_obj_png_file=per_obj_png_file,
             output_palette=output_palette,
         )
+
+    return num_frames, inference_seconds
 
 
 @torch.inference_mode()
@@ -305,6 +318,7 @@ def vos_separate_inference_per_object(
     # run inference separately for each object in the video
     object_ids = sorted(inputs_per_object)
     output_scores_per_object = defaultdict(dict)
+    inference_seconds = 0.0
     for object_id in object_ids:
         # add those input masks to SAM 2 inference state before propagation
         input_frame_inds = sorted(inputs_per_object[object_id])
@@ -318,6 +332,8 @@ def vos_separate_inference_per_object(
             )
 
         # run propagation throughout the video and collect the results in a dict
+        torch.cuda.synchronize()
+        inference_start = perf_counter()
         for out_frame_idx, _, out_mask_logits in predictor.propagate_in_video(
             inference_state,
             start_frame_idx=min(input_frame_inds),
@@ -325,6 +341,8 @@ def vos_separate_inference_per_object(
         ):
             obj_scores = out_mask_logits.cpu().numpy()
             output_scores_per_object[object_id][out_frame_idx] = obj_scores
+        torch.cuda.synchronize()
+        inference_seconds += perf_counter() - inference_start
 
     # post-processing: consolidate the per-object scores into per-frame masks
     os.makedirs(os.path.join(output_mask_dir, video_name), exist_ok=True)
@@ -362,6 +380,14 @@ def vos_separate_inference_per_object(
             per_obj_png_file=per_obj_png_file,
             output_palette=output_palette,
         )
+
+    num_frames = len(video_segments)
+    inference_fps = num_frames / inference_seconds if inference_seconds > 0 else 0.0
+    print(
+        f"{video_name}: {num_frames} frames propagated in "
+        f"{inference_seconds:.3f} seconds ({inference_fps:.2f} FPS)"
+    )
+    return num_frames, inference_seconds
 
 
 def main():
@@ -472,10 +498,12 @@ def main():
         ]
     print(f"running VOS prediction on {len(video_names)} videos:\n{video_names}")
 
+    total_frames = 0
+    total_inference_seconds = 0.0
     for n_video, video_name in enumerate(video_names):
         print(f"\n{n_video + 1}/{len(video_names)} - running on {video_name}")
         if not args.track_object_appearing_later_in_video:
-            vos_inference(
+            num_frames, inference_seconds = vos_inference(
                 predictor=predictor,
                 base_video_dir=args.base_video_dir,
                 input_mask_dir=args.input_mask_dir,
@@ -486,7 +514,7 @@ def main():
                 per_obj_png_file=args.per_obj_png_file,
             )
         else:
-            vos_separate_inference_per_object(
+            num_frames, inference_seconds = vos_separate_inference_per_object(
                 predictor=predictor,
                 base_video_dir=args.base_video_dir,
                 input_mask_dir=args.input_mask_dir,
@@ -496,10 +524,22 @@ def main():
                 use_all_masks=args.use_all_masks,
                 per_obj_png_file=args.per_obj_png_file,
             )
+        total_frames += num_frames
+        total_inference_seconds += inference_seconds
 
     print(
         f"completed VOS prediction on {len(video_names)} videos -- "
         f"output masks saved to {args.output_mask_dir}"
+    )
+    aggregate_fps = (
+        total_frames / total_inference_seconds
+        if total_inference_seconds > 0
+        else 0.0
+    )
+    print(
+        f"aggregate inference: {total_frames} frames propagated in "
+        f"{total_inference_seconds:.3f} seconds "
+        f"({aggregate_fps:.2f} FPS)"
     )
 
 

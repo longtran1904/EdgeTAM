@@ -9,6 +9,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.cuda.nvtx as nvtx
 
 
 class ImageEncoder(nn.Module):
@@ -27,11 +28,23 @@ class ImageEncoder(nn.Module):
         ), f"Channel dims of trunk and neck do not match. Trunk: {self.trunk.channel_list}, neck: {self.neck.backbone_channel_list}"
 
     def forward(self, sample: torch.Tensor):
-        # Forward through backbone
-        features, pos = self.neck(self.trunk(sample))
+        
+        nvtx.range_push("ImageEncoder.forward")
+
+        # Stage 1: RepViT backbone
+        nvtx.range_push("ImageEncoder.trunk")
+        trunk_features = self.trunk(sample)
+        nvtx.range_pop()
+
+        # Stage 2: FPN neck
+        nvtx.range_push("ImageEncoder.neck")
+        features, pos = self.neck(trunk_features)
+        nvtx.range_pop()
+
+        # Stage 3: Output preparation
+        nvtx.range_push("ImageEncoder.output")
         if self.scalp > 0:
-            # Discard the lowest resolution features
-            features, pos = features[: -self.scalp], pos[: -self.scalp]
+            features, pos = features[:-self.scalp], pos[:-self.scalp]
 
         src = features[-1]
         output = {
@@ -39,6 +52,9 @@ class ImageEncoder(nn.Module):
             "vision_pos_enc": pos,
             "backbone_fpn": features,
         }
+        nvtx.range_pop()
+        nvtx.range_pop()
+        
         return output
 
 

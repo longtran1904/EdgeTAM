@@ -57,9 +57,23 @@ class SAM2CameraPredictor(SAM2Base):
         image_size=1024,
     ):
         if isinstance(img, torch.Tensor):
-            # print("Image is already a tensor.")
+            if img.ndim != 3 or img.shape[0] != 3:
+                raise ValueError(
+                    "tensor image must have CHW shape [3, height, width]"
+                )
+            if not torch.is_floating_point(img):
+                raise TypeError("tensor image must use a floating-point dtype")
+
             height, width = img.shape[1:3]
-            return img, width, height # Assumed tensor is on GPU device and normalized
+            resized = F.interpolate(
+                img.unsqueeze(0),
+                size=(image_size, image_size),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            mean = self._img_mean.to(device=img.device, dtype=img.dtype)
+            std = self._img_std.to(device=img.device, dtype=img.dtype)
+            return (resized - mean) / std, width, height
         elif isinstance(img, np.ndarray):
             print("Converting ndarray to tensor...")
             time.sleep(0.1)
@@ -78,6 +92,7 @@ class SAM2CameraPredictor(SAM2Base):
         
         img -= self._img_mean
         img /= self._img_std
+        print("Convert ndarray to tensor done.")
         return img, width, height
 
     ###
@@ -836,12 +851,15 @@ class SAM2CameraPredictor(SAM2Base):
         img,
     ):
         # print("tracking frame is Tensor = ", isinstance(img, torch.Tensor))
+        # print(f"[CameraTracker] Tracking frame {self.frame_idx}...")
         self.frame_idx += 1
         self.condition_state["num_frames"] += 1
         if not self.condition_state["tracking_has_started"]:
             self.propagate_in_video_preflight()
 
         img, _, _ = self.perpare_data(img, image_size=self.image_size)
+        
+        # print(f"[CameraTracker] Got processed image of shape {img.shape} for tracking frame {self.frame_idx}...")
 
         output_dict = self.condition_state["output_dict"]
         obj_ids = self.condition_state["obj_ids"]

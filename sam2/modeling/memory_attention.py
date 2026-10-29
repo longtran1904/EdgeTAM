@@ -12,6 +12,7 @@ from sam2.modeling.sam.transformer import RoPEAttention, RoPEAttentionv2
 
 from sam2.modeling.sam2_utils import get_activation_fn, get_clones
 from torch import nn, Tensor
+import torch.cuda.nvtx as nvtx
 
 
 class MemoryAttentionLayer(nn.Module):
@@ -95,16 +96,25 @@ class MemoryAttentionLayer(nn.Module):
         num_k_exclude_rope: int = 0,
         rope_k_repeat: int = -1,
     ) -> torch.Tensor:
+        nvtx.range_push("MemoryAttention.forward")
 
         # Self-Attn, Cross-Attn
+        nvtx.range_push("Self-Attn")
         tgt = self._forward_sa(tgt, query_pos)
+        nvtx.range_pop()
+        nvtx.range_push("Cross-Attn")
         tgt = self._forward_ca(
             tgt, memory, query_pos, pos, num_k_exclude_rope, rope_k_repeat
         )
+        nvtx.range_pop()
+        
+        nvtx.range_push("MLP")
         # MLP
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
         tgt = tgt + self.dropout3(tgt2)
+        nvtx.range_pop()
+        nvtx.range_pop()
         return tgt
 
 

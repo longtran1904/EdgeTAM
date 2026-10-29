@@ -14,6 +14,7 @@ from sam2.modeling.sam.transformer import TwoWayTransformer
 from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
 
 from torch.nn.init import trunc_normal_
+import torch.cuda.nvtx as nvtx
 
 # a large negative value as a placeholder score for missing objects
 NO_OBJ_SCORE = -1024.0
@@ -306,6 +307,8 @@ class SAM2Base(torch.nn.Module):
         - obj_ptr: [B, C] shape, the object pointer vector for the output mask, extracted
           based on the output token from the SAM mask decoder.
         """
+        nvtx.range_push("_forward_sam_heads")
+        
         B = backbone_features.size(0)
         device = backbone_features.device
         assert backbone_features.size(1) == self.sam_prompt_embed_dim
@@ -342,11 +345,14 @@ class SAM2Base(torch.nn.Module):
             # a learned `no_mask_embed` to indicate no mask input in this case).
             sam_mask_prompt = None
 
+        nvtx.range_push("PromptEncoder")
         sparse_embeddings, dense_embeddings = self.sam_prompt_encoder(
             points=(sam_point_coords, sam_point_labels),
             boxes=None,
             masks=sam_mask_prompt,
         )
+        nvtx.range_pop()
+        nvtx.range_push("MaskDecoder")
         (
             low_res_multimasks,
             ious,
@@ -361,6 +367,7 @@ class SAM2Base(torch.nn.Module):
             repeat_image=False,  # the image is already batched
             high_res_features=high_res_features,
         )
+        nvtx.range_pop()
         if self.pred_obj_scores:
             is_obj_appearing = object_score_logits > 0
 
@@ -407,6 +414,8 @@ class SAM2Base(torch.nn.Module):
                 obj_ptr = lambda_is_obj_appearing * obj_ptr
             obj_ptr = obj_ptr + (1 - lambda_is_obj_appearing) * self.no_obj_ptr
 
+         
+        nvtx.range_pop()  # pop _forward_sam_heads   
         return (
             low_res_multimasks,
             high_res_multimasks,
@@ -737,7 +746,7 @@ class SAM2Base(torch.nn.Module):
             )
 
         if self.spatial_perceiver is not None:
-            print("[SAM2 BASE]: Spatial perceiver is applied to the memory features.")
+            # print("[SAM2 BASE]: Spatial perceiver is applied to the memory features.")
             maskmem_features, maskmem_pos_enc[0] = self.spatial_perceiver(
                 maskmem_features, maskmem_pos_enc[0]
             )
@@ -817,6 +826,7 @@ class SAM2Base(torch.nn.Module):
     ):
         if run_mem_encoder and self.num_maskmem > 0:
             high_res_masks_for_mem_enc = high_res_masks
+            nvtx.range_push("Encode Memory")
             maskmem_features, maskmem_pos_enc = self._encode_new_memory(
                 current_vision_feats=current_vision_feats,
                 feat_sizes=feat_sizes,
@@ -824,6 +834,7 @@ class SAM2Base(torch.nn.Module):
                 object_score_logits=object_score_logits,
                 is_mask_from_pts=(point_inputs is not None),
             )
+            nvtx.range_pop()
             current_out["maskmem_features"] = maskmem_features
             current_out["maskmem_pos_enc"] = maskmem_pos_enc
         else:

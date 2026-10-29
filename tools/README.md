@@ -36,6 +36,11 @@ python ./tools/vos_inference.py \
 
 Then, we can use the evaluation tools or servers for each dataset to get the performance of the prediction PNG files above.
 
+The script also reports per-video and aggregate propagation FPS. The timer uses
+CUDA synchronization and covers `propagate_in_video` plus output-mask transfer
+to CPU. It excludes model loading, JPEG loading and state initialization,
+initial prompt setup, PNG writing, and dataset evaluation.
+
 Note: by default, the `vos_inference.py` script above assumes that all objects to track already appear on frame 0 in each video (as is the case in DAVIS, MOSE or SA-V). **For VOS datasets that don't have all objects to track appearing in the first frame (such as LVOS or YouTube-VOS), please add the `--track_object_appearing_later_in_video` flag when using `vos_inference.py`**.
 
 ### CoreML Export for iOS/macOS Deployment
